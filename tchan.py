@@ -121,10 +121,13 @@ def parse_info(tree):
     )
 
 
-def parse_messages(original_url, tree):
-    "Retrieve messages from HTML tree"
+def parse_messages(original_url, tree, max_messages=None):
+    "Retrieve messages from HTML tree, with optional max_messages limit"
     messages = tree.xpath("//div[contains(@class, 'tgme_widget_message_wrap')]")
+    count = 0
     for message in reversed(messages):
+        if max_messages is not None and count >= max_messages:
+            break
         if message.xpath(".//div[contains(@class, 'tme_no_messages_found')]"):
             # XXX: this case may happen because a great number of requests was
             # made and Telegram sent this response as if there were no new
@@ -381,6 +384,7 @@ def parse_messages(original_url, tree):
             forwarded_author=forwarded_author,
             forwarded_author_url=forwarded_author_url,
         )
+        count += 1
 
 
 class ChannelScraper:
@@ -394,17 +398,27 @@ class ChannelScraper:
         tree = document_fromstring(response.text)
         return parse_info(tree)
 
-    def messages(self, username_or_url):
-        "Get messages from a channel, paginating until it ends"
+    def messages(self, username_or_url, max_messages=None):
+        "Get messages from a channel, paginating until it ends or max_messages is reached"
         url = normalize_url(username_or_url)
 
         last_captured_id = None
+        total_count = 0
         while True:
             response = self.session.get(url)
             tree = document_fromstring(response.text)
-            for message in parse_messages(url, tree):
+            # Calculate how many messages to fetch in this page
+            page_limit = None
+            if max_messages is not None:
+                page_limit = max_messages - total_count
+                if page_limit <= 0:
+                    break
+            for message in parse_messages(url, tree, max_messages=page_limit):
                 last_captured_id = message.id
                 yield message
+                total_count += 1
+                if max_messages is not None and total_count >= max_messages:
+                    return
             next_page_url = tree.xpath("//link[@rel = 'prev']/@href")
             if not next_page_url:
                 if last_captured_id is not None and message.id > 20:
